@@ -1,0 +1,104 @@
+name: Build Moblin IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install -r requirements.txt
+
+      - name: Create user config
+        shell: bash
+        run: |
+          cp User.template.xcconfig Config/User.xcconfig
+
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          BUNDLE_ID="com.${OWNER}.moblin"
+
+          sed -i '' \
+            "s/^DEVELOPMENT_TEAM = .*/DEVELOPMENT_TEAM =/" \
+            Config/User.xcconfig
+
+          sed -i '' \
+            "s/^BASE_PRODUCT_BUNDLE_IDENTIFIER = .*/BASE_PRODUCT_BUNDLE_IDENTIFIER = ${BUNDLE_ID}/" \
+            Config/User.xcconfig
+
+          echo "Bundle ID: ${BUNDLE_ID}"
+
+      - name: Install just
+        run: |
+          brew install just
+
+      - name: Prepare web frontend
+        run: |
+          just web-remote-control-frontend-prepare
+          just web-remote-control-frontend-build
+
+      - name: Build iOS app
+        run: |
+          rm -rf build
+
+          xcodebuild \
+            -scheme Moblin \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            -skipPackagePluginValidation \
+            build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Check Moblin.app
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/Moblin.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Moblin.app wurde nicht gefunden."
+            echo ""
+            echo "Gefundene .app Dateien:"
+            find build -name "*.app" -print || true
+            exit 1
+          fi
+
+          echo "Gefunden:"
+          du -sh "$APP_PATH"
+
+      - name: Create IPA
+        run: |
+          rm -rf ipa
+          mkdir -p ipa/Payload
+
+          cp -R \
+            build/Build/Products/Release-iphoneos/Moblin.app \
+            ipa/Payload/
+
+          cd ipa
+
+          zip -r ../Moblin.ipa Payload \
+            -x "*.DS_Store"
+
+          cd ..
+
+          ls -lh Moblin.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Moblin-IPA
+          path: Moblin.ipa
+          if-no-files-found: error
+          retention-days: 7
